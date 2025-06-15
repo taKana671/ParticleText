@@ -18,10 +18,10 @@ from panda3d.core import GeomEnums, GeomVertexWriter, Geom, GeomNode, GeomPoints
 
 # sys.path.append(os.path.join(os.path.dirname(__file__), '../pytweener'))
 
-from noise import PerlinNoise
+from noise import PerlinNoise, ValueNoise, VoronoiNoise, PeriodicNoise
 from noise import SimplexNoise
 from pytweener.tween import Tween
-from create_text import TextImage, generate_text_img, get_text_range
+from text_image_creator import TextImage, generate_text_img, get_text_range
 
 
 class ParticleText(ShowBase):
@@ -32,14 +32,8 @@ class ParticleText(ShowBase):
         self.set_background_color((0, 0, 0))
 
         props = self.win.get_properties()
+        self.screen_size = props.get_size()
 
-        print(props.get_size())
-        self.perlin = PerlinNoise()
-        # self.perlin = SimplexNoise()
-
-        self.card_root = NodePath('card_root')
-        # self.card_root.reparent_to(self.aspect2d)
-        self.card_root.reparent_to(self.render)
         self.cnt = 0
         self.speed = 0.1
         self.amp = 0
@@ -53,9 +47,12 @@ class ParticleText(ShowBase):
         self.starts = []
         self.indexes = []
         self.tweens = []
-        self.draw_text()
-        self.para = Parallel()
+        # self.draw_text()
+        # self.to_random_particles('Panda3D Hello World')
+        # self.to_simplex_particles('Panda3D Hello World')
+        self.to_perlin_particles('Panda3D Hello World')
 
+        self.delay_starting = False
         self.total_dt = 0
         self.is_move = False
         self.is_reverse = False
@@ -93,16 +90,27 @@ class ParticleText(ShowBase):
         for tween in self.tweens:
             tween.resume()
 
-    def start_move(self):
-        self.start_time = globalClock.get_frame_time()
-        self.is_move = not self.is_move
+    def delay_start(self, dt):
+        self.start_end = False
 
         for tween in self.tweens:
-            # tween.start()
-            tween.loop()
+            if not tween.is_playing and self.total_dt >= tween.delay:
+                tween.start()
+                self.start_end = True
+
+        self.total_dt += dt
+
+    def start_move(self):
+        self.delay_starting = True
+        # self.start_time = globalClock.get_frame_time()
+        # self.is_move = not self.is_move
+
+        # for tween in self.tweens:
+        #     tween.start()
+            # tween.loop()
 
     def scatter_text4(self, dt):
-        geom_nd = self.np.node()
+        geom_nd = self.points_np.node()
         geom = geom_nd.modify_geom(0)
         vdata = geom.modify_vertex_data()
         vdata_arr = vdata.modify_array(0)
@@ -116,172 +124,128 @@ class ParticleText(ShowBase):
                 vdata_mem[i] = tween.next_pos.x
                 vdata_mem[i + 2] = tween.next_pos.z
 
-    def get_dest(self, x, y, t, start_x, start_y):
-        nx = x / 637
-        ny = y / 57
-
-        px = self.perlin.pnoise2(nx + t, ny + t) - 0.5
-        py = self.perlin.pnoise2(nx * 2 + t, ny + t) - 0.5
-
-        # import pdb; pdb.set_trace()
-        # spread = (1 - nx) * 100 + 100
-        # ex = 800 * px + random.random() * spread
-        # ey = 600 * py + random.random() * spread * 0.5
-
-        ex = 1200 * px
-        ey = 400 * py
-
-        self.dests.append((x, y))
-        # tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 2, repeat=3, loop=False, yoyo=False, easing_type='in_out_quint')
-        tween = Tween(Point3(start_x, 0, start_y), Point3(ex, 0, ey), 2, yoyo=True, easing_type='in_out_expo')
-
-        self.tweens.append(tween)
-
-        #     LerpFunc(self.scatter_text2, duration=1, fromData=0, toData=300, blendType='easeInOut'),
-        #     self.np.colorScaleInterval(1, (1, 1, 1, 0), blendType='easeInOut')
-        # ).start()
-
-        # spread = (1 - nx) * 100 - 100
-        # self.dests.append((px * 800 + spread * random.random(), py * 600 + spread * random.random()))
-
-
-        # self.dests.append((px * 800, py * 600))
-
-
-    def draw_text(self):
-        cnt = 0
-        t = random.uniform(0, 1000)
-        vdata_values = array.array('f', [])
-        text_img = TextImage('Panda3D Hello World')
-
-        for px, py in text_img.pixel_coordinates():
-            x = px - text_img.size.w / 2
-            y = py - text_img.size.h / 2
-
-            vdata_values.extend([x, 0, y])
-            self.get_dest(px, py, t, x, y)
-            cnt += 1
-
+    def create_points(self, vdata_values, vertices_cnt):
         vdata = GeomVertexData('texts', GeomVertexFormat.get_v3(), Geom.UH_static)
-        vdata.unclean_set_num_rows(cnt)
+        vdata.unclean_set_num_rows(vertices_cnt)
         vdata_mem = memoryview(vdata.modify_array(0)).cast('B').cast('f')
         vdata_mem[:] = vdata_values
 
         prim = GeomPoints(GeomEnums.UH_static)
-        prim.add_next_vertices(cnt)
+        prim.add_next_vertices(vertices_cnt)
 
         geom = Geom(vdata)
         geom.add_primitive(prim)
         geom_node = GeomNode('points')
         geom_node.add_geom(geom)
 
-        self.np = self.render.attach_new_node(geom_node)
-        self.np.set_render_mode_thickness(1.)
+        self.points_np = self.render.attach_new_node(geom_node)
+        # self.points_np.set_render_mode_thickness(1.)
 
-
-
-    # def draw_text(self):
-    #     img = generate_text_img('Panda3D Hello World')
-    #     # img = cv2.imread('img_pil2.png')
-    #     img = np.fliplr(img)
-    #     img = np.rot90(img, 2)
-    #     # img = cv2.flip(img, 1)
-    #     # img = cv2.rotate(img, cv2.ROTATE_180)
-    #     h, w = img.shape[:2]
-    #     print('img_size', h, w)
-
-    #     text_range = get_text_range(img)
-    #     print('text_range', text_range)
-
-    #     t = random.uniform(0, 1000)
+    # def to_draw_text(self):
     #     cnt = 0
+    #     t = random.uniform(0, 1000)
     #     vdata_values = array.array('f', [])
+    #     text_img = TextImage('Panda3D Hello World')
 
-    #     for j in range(h):
-    #         for i in range(w):
-    #             cell = img[j, i, :]
-    #             if not (cell[0] == 0 and cell[1] == 0 and cell[2] == 0):
-    #                 # print(j, i)
-    #                 x = i - w / 2
-    #                 y = j - h / 2
+    #     for px, py in text_img.pixel_coordinates():
+    #         x = px - text_img.size.w / 2
+    #         y = py - text_img.size.h / 2
 
-    #                 vdata_values.extend([x, 0, y])
-    #                 self.get_dest(i, j, t, x, y)
+    #         vdata_values.extend([x, 0, y])
+    #         self.get_dest(px, py, t, x, y)
+    #         cnt += 1
 
-    #                 cnt += 1
+    #     self.create_points(vdata_values, cnt)
 
-    #     vdata = GeomVertexData('texts', GeomVertexFormat.get_v3(), Geom.UH_static)
-    #     vdata.unclean_set_num_rows(cnt)
-    #     vdata_mem = memoryview(vdata.modify_array(0)).cast('B').cast('f')
-    #     vdata_mem[:] = vdata_values
+    def to_random_particles(self, text):
+        cnt = 0
+        vdata_values = array.array('f', [])
+        text_img = TextImage(text)
 
-    #     prim = GeomPoints(GeomEnums.UH_static)
-    #     prim.add_next_vertices(cnt)
+        for px, py in text_img.pixel_coordinates():
+            x = px - text_img.size.w / 2
+            y = py - text_img.size.h / 2
+            vdata_values.extend([x, 0, y])
 
-    #     geom = Geom(vdata)
-    #     geom.add_primitive(prim)
-    #     geom_node = GeomNode('points')
-    #     geom_node.add_geom(geom)
+            ex = (random.random() - 0.5) * self.screen_size.x
+            ey = (random.random() - 0.5) * self.screen_size.y
 
-    #     self.np = self.render.attach_new_node(geom_node)
-    #     self.np.set_render_mode_thickness(1.)
+            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 2, yoyo=True, easing_type='in_out_expo')
+            self.tweens.append(tween)
+            cnt += 1
 
-        # >>> arr
-        # array([[[0, 0, 0],
-        #         [1, 1, 1],
-        #         [2, 2, 2]],
+        self.create_points(vdata_values, cnt)
 
-        #     [[3, 3, 3],
-        #         [4, 4, 4],
-        #         [5, 5, 5]]])
-        # >>> arr2
-        # array([[[2, 2, 2],
-        #         [1, 1, 1],
-        #         [0, 0, 0]],
+    def to_simplex_particles(self, text):
+        cnt = 0
+        text_img = TextImage(text)
+        vdata_values = array.array('f', [])
 
-        #     [[5, 5, 5],
-        #         [4, 4, 4],
-        #         [3, 3, 3]]], dtype=int32)
-        # >>> arr3
-        # array([[[3, 3, 3],
-        #         [4, 4, 4],
-        #         [5, 5, 5]],
+        simplex = SimplexNoise()
+        t = simplex.mock_time()
+        # t = random.uniform(0, 1000)
 
-        #     [[0, 0, 0],
-        #         [1, 1, 1],
-        #         [2, 2, 2]]], dtype=int32)
-        # >>> arr.shape
-        # (2, 3, 3)
-        # >>> arr2.shape
-        # (2, 3, 3)
-        # >>> arr3.shape
-        # (2, 3, 3)
-        # >>> arr3[0]
-        # array([[3, 3, 3],
-        #     [4, 4, 4],
-        #     [5, 5, 5]], dtype=int32)
-        # >>> arr3[0][1]
-        # array([4, 4, 4], dtype=int32)
-        # >>> arr3[0][1][:]
-        # array([4, 4, 4], dtype=int32)
+        for px, py in text_img.pixel_coordinates():
+            x = px - text_img.size.w / 2
+            y = py - text_img.size.h / 2
+            vdata_values.extend([x, 0, y])
 
+            nx = px / text_img.size.w
+            ny = py / text_img.size.h
+            sx = simplex.snoise2(nx + t, ny + t) - 0.5
+            sy = simplex.snoise2((nx + t) * 2, ny + t) - 0.5
+            ex = self.screen_size.x * sx
+            ey = self.screen_size.y * sy
 
+            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 2, yoyo=True, easing_type='in_out_expo')
+            self.tweens.append(tween)
+            cnt += 1
 
-        # **************when parent is aspect2D***********************
-        # card = CardMaker('card')
-        # card.set_frame(-0.01, 0.01, -0.01, 0.01)
-        # self.model = self.card_root.attach_new_node(card.generate())
-        # self.model.set_color(1, 0, 0, 1)
-        # # model.set_p(90)
-        # self.model.set_pos(0, 0, 0)
-        # *************************************************************
+        self.create_points(vdata_values, cnt)
+
+    def to_perlin_particles(self, text):
+        cnt = 0
+        text_img = TextImage(text)
+        vdata_values = array.array('f', [])
+
+        perlin = PerlinNoise()
+        # perlin = ValueNoise()
+        t = perlin.mock_time() * 100
+
+        for px, py in text_img.pixel_coordinates():
+            x = px - text_img.size.w / 2
+            y = py - text_img.size.h / 2
+            vdata_values.extend([x, 0, y])
+
+            nx = px / text_img.size.w * 2
+            ny = py / text_img.size.h * 0.5
+            pnx = perlin.pnoise2(nx + t, (ny + t) * 3) - 0.5
+            pny = perlin.pnoise2((nx + t) * 1.5, ny + t) - 0.5
+            spread = (1 - nx) * 200 + 100
+            ex = self.screen_size.x * pnx + random.random() * spread
+            ey = self.screen_size.y * pny + random.random() * spread
+
+            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 4, yoyo=True, easing_type='in_out_expo')
+            tween.delay = nx * 0.5
+            self.tweens.append(tween)
+            self.starts.append(py)
+            cnt += 1
+
+        self.create_points(vdata_values, cnt)
+        self.starts_set = list(set(self.starts))
 
     def update(self, task):
         dt = globalClock.get_dt()
+        # print(dt)
 
         if self.is_move:
             self.scatter_text4(dt)
+            # self.scatter_text5(dt)
             # self.is_move = False
+
+        if self.delay_starting:
+            self.delay_start(dt)
+            self.scatter_text4(dt)
 
         if self.is_reverse:
             self.scatter_text_reverse(dt)
@@ -293,3 +257,13 @@ class ParticleText(ShowBase):
 if __name__ == '__main__':
     app = ParticleText()
     app.run()
+
+
+# **************when parent is aspect2D***********************
+# card = CardMaker('card')
+# card.set_frame(-0.01, 0.01, -0.01, 0.01)
+# self.model = self.card_root.attach_new_node(card.generate())
+# self.model.set_color(1, 0, 0, 1)
+# # model.set_p(90)
+# self.model.set_pos(0, 0, 0)
+# *************************************************************
