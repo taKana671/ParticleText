@@ -1,27 +1,54 @@
 import array
 import sys
-import cv2
 import random
-import math
-import os
+from enum import Enum, auto
 
-import numpy as np
-import scipy.interpolate as sci
+from direct.interval.LerpInterval import LerpColorInterval, LerpColorScaleInterval
 from direct.interval.IntervalGlobal import Parallel, Sequence, Wait
-from direct.interval.LerpInterval import LerpFunc
 from direct.showbase.ShowBase import ShowBase
 from direct.showbase.ShowBaseGlobal import globalClock
-from panda3d.core import NodePath, CardMaker, Vec3, Point3
+from panda3d.core import Point3, LColor
 from panda3d.core import GeomVertexData, GeomVertexFormat
-from panda3d.core import GeomEnums, GeomVertexWriter, Geom, GeomNode, GeomPoints
+from panda3d.core import GeomEnums, Geom, GeomNode, GeomPoints
 
-
-# sys.path.append(os.path.join(os.path.dirname(__file__), '../pytweener'))
-
-from noise import PerlinNoise, ValueNoise, VoronoiNoise, PeriodicNoise
+from noise import PerlinNoise
 from noise import SimplexNoise
 from pytweener.tween import Tween
-from text_image_creator import TextImage, generate_text_img, get_text_range
+from text_image_creator import TextImage
+
+from animations import RandomParticles, PerlinParticles, DelayPerlinParticles, DelaySimplexParticles
+from animations import SimplexParticles
+
+
+class Particles(Enum):
+
+    RANDOM = auto()
+    PERLIN = auto()
+    SIMPLEX = auto()
+    DELAY_SIMPLEX = auto()
+    ANIMATION = auto()
+    DELAY_PERLIN = auto()
+    DEBUG = auto()
+
+
+class Status(Enum):
+
+    SETUP = auto()
+    SHOW_TEXT = auto()
+    START_TWEEN = auto()
+    HIDE_TEXT = auto()
+    TO_PARTICLES = auto()
+    TURN_BACK = auto()
+    TO_TEXT = auto()
+    SHOW_PARTICLES = auto()
+
+
+class TextColorScaleInterval(LerpColorScaleInterval):
+
+    def __init__(self, np, duration=1, fade=True, blend_type='easeInOut'):
+        color_scale = (1, 1, 1, 0) if fade else (1, 1, 1, 1)
+        start_color = (1, 1, 1, 1) if fade else (1, 1, 1, 0)
+        super().__init__(np, duration, color_scale, start_color, blendType=blend_type)
 
 
 class ParticleText(ShowBase):
@@ -31,32 +58,11 @@ class ParticleText(ShowBase):
         self.disable_mouse()
         self.set_background_color((0, 0, 0))
 
-        props = self.win.get_properties()
-        self.screen_size = props.get_size()
-
-        self.cnt = 0
-        self.speed = 0.1
-        self.amp = 0
-
-        self.amp_x = 0
-        self.amp_y = 0
-
-        # self.read_image()
-        self.splines = []
-        self.dests = []
-        self.starts = []
-        self.indexes = []
-        self.tweens = []
-        # self.draw_text()
-        # self.to_random_particles('Panda3D Hello World')
-        # self.to_simplex_particles('Panda3D Hello World')
-        self.to_perlin_particles('Panda3D Hello World')
-
         self.delay_starting = False
-        self.total_dt = 0
         self.is_move = False
         self.is_reverse = False
-        self.is_fade = False
+
+        self.mode = None
 
         self.accept('t', self.turn_back)
         self.accept('m', self.start_move)
@@ -79,102 +85,38 @@ class ParticleText(ShowBase):
             tween.turn_back()
 
     def finish(self):
-        for tween in self.tweens:
-            tween.finish()
+        self.animation.finish()
+        # for tween in self.tweens:
+        #     tween.finish()
 
     def pause(self):
-        for tween in self.tweens:
-            tween.pause()
+        self.animation.pause()
+        # for tween in self.tweens:
+        #     tween.pause()
 
     def resume(self):
-        for tween in self.tweens:
-            tween.resume()
+        self.animation.resume()
+        # for tween in self.tweens:
+            # tween.resume()
 
     def delay_start(self, dt):
-        self.start_end = False
+        # self.total_dt += dt
 
         for tween in self.tweens:
-            if not tween.is_playing and self.total_dt >= tween.delay:
-                tween.start()
-                self.start_end = True
+            if not tween.delay_started:
+                tween.delay_start(self.total_dt)
 
-        self.total_dt += dt
+
+        # if not self.is_fade and self.total_dt > 2:
+        #     self.points_np.colorScaleInterval(2, (1, 1, 1, 0), blendType='easeInOut').start()
+        #     self.is_fade = True
 
     def start_move(self):
-        self.delay_starting = True
-        # self.start_time = globalClock.get_frame_time()
-        # self.is_move = not self.is_move
-
-        # for tween in self.tweens:
-        #     tween.start()
-            # tween.loop()
-
-    def scatter_text4(self, dt):
-        geom_nd = self.points_np.node()
-        geom = geom_nd.modify_geom(0)
-        vdata = geom.modify_vertex_data()
-        vdata_arr = vdata.modify_array(0)
-        vdata_mem = memoryview(vdata_arr).cast('B').cast('f')
-
-        for n, i in enumerate(range(0, len(vdata_mem), 3)):
-            tween = self.tweens[n]
-
-            if tween.is_playing:
-                tween.update()
-                vdata_mem[i] = tween.next_pos.x
-                vdata_mem[i + 2] = tween.next_pos.z
-
-    def create_points(self, vdata_values, vertices_cnt):
-        vdata = GeomVertexData('texts', GeomVertexFormat.get_v3(), Geom.UH_static)
-        vdata.unclean_set_num_rows(vertices_cnt)
-        vdata_mem = memoryview(vdata.modify_array(0)).cast('B').cast('f')
-        vdata_mem[:] = vdata_values
-
-        prim = GeomPoints(GeomEnums.UH_static)
-        prim.add_next_vertices(vertices_cnt)
-
-        geom = Geom(vdata)
-        geom.add_primitive(prim)
-        geom_node = GeomNode('points')
-        geom_node.add_geom(geom)
-
-        self.points_np = self.render.attach_new_node(geom_node)
-        # self.points_np.set_render_mode_thickness(1.)
-
-    # def to_draw_text(self):
-    #     cnt = 0
-    #     t = random.uniform(0, 1000)
-    #     vdata_values = array.array('f', [])
-    #     text_img = TextImage('Panda3D Hello World')
-
-    #     for px, py in text_img.pixel_coordinates():
-    #         x = px - text_img.size.w / 2
-    #         y = py - text_img.size.h / 2
-
-    #         vdata_values.extend([x, 0, y])
-    #         self.get_dest(px, py, t, x, y)
-    #         cnt += 1
-
-    #     self.create_points(vdata_values, cnt)
-
-    def to_random_particles(self, text):
-        cnt = 0
-        vdata_values = array.array('f', [])
-        text_img = TextImage(text)
-
-        for px, py in text_img.pixel_coordinates():
-            x = px - text_img.size.w / 2
-            y = py - text_img.size.h / 2
-            vdata_values.extend([x, 0, y])
-
-            ex = (random.random() - 0.5) * self.screen_size.x
-            ey = (random.random() - 0.5) * self.screen_size.y
-
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 2, yoyo=True, easing_type='in_out_expo')
-            self.tweens.append(tween)
-            cnt += 1
-
-        self.create_points(vdata_values, cnt)
+        # self.mode = Particles.RANDOM
+        # self.mode = Particles.PERLIN
+        # self.mode = Particles.DELAY_PERLIN
+        # self.mode = Particles.DELAY_SIMPLEX
+        self.mode = Particles.SIMPLEX
 
     def to_simplex_particles(self, text):
         cnt = 0
@@ -182,8 +124,7 @@ class ParticleText(ShowBase):
         vdata_values = array.array('f', [])
 
         simplex = SimplexNoise()
-        t = simplex.mock_time()
-        # t = random.uniform(0, 1000)
+        t = random.randint(0, 1000)
 
         for px, py in text_img.pixel_coordinates():
             x = px - text_img.size.w / 2
@@ -192,65 +133,53 @@ class ParticleText(ShowBase):
 
             nx = px / text_img.size.w
             ny = py / text_img.size.h
-            sx = simplex.snoise2(nx + t, ny + t) - 0.5
-            sy = simplex.snoise2((nx + t) * 2, ny + t) - 0.5
-            ex = self.screen_size.x * sx
-            ey = self.screen_size.y * sy
+            pnx = simplex.snoise2(nx + t, (ny + t) * 3) - 0.5
+            pny = simplex.snoise2((nx + t) * 1.5, ny + t) - 0.5
 
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 2, yoyo=True, easing_type='in_out_expo')
-            self.tweens.append(tween)
-            cnt += 1
-
-        self.create_points(vdata_values, cnt)
-
-    def to_perlin_particles(self, text):
-        cnt = 0
-        text_img = TextImage(text)
-        vdata_values = array.array('f', [])
-
-        perlin = PerlinNoise()
-        # perlin = ValueNoise()
-        t = perlin.mock_time() * 100
-
-        for px, py in text_img.pixel_coordinates():
-            x = px - text_img.size.w / 2
-            y = py - text_img.size.h / 2
-            vdata_values.extend([x, 0, y])
-
-            nx = px / text_img.size.w * 2
-            ny = py / text_img.size.h * 0.5
-            pnx = perlin.pnoise2(nx + t, (ny + t) * 3) - 0.5
-            pny = perlin.pnoise2((nx + t) * 1.5, ny + t) - 0.5
-            spread = (1 - nx) * 200 + 100
+            spread = (1 - nx) * 200 - 100
             ex = self.screen_size.x * pnx + random.random() * spread
-            ey = self.screen_size.y * pny + random.random() * spread
+            ey = self.screen_size.y / 2 * pny + random.random() * spread
 
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 4, yoyo=True, easing_type='in_out_expo')
-            tween.delay = nx * 0.5
+            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 3, delay=nx, yoyo=True, easing_type='in_out_expo')
             self.tweens.append(tween)
-            self.starts.append(py)
             cnt += 1
 
         self.create_points(vdata_values, cnt)
-        self.starts_set = list(set(self.starts))
 
     def update(self, task):
         dt = globalClock.get_dt()
-        # print(dt)
 
-        if self.is_move:
-            self.scatter_text4(dt)
-            # self.scatter_text5(dt)
-            # self.is_move = False
+        match self.mode:
 
-        if self.delay_starting:
-            self.delay_start(dt)
-            self.scatter_text4(dt)
+            case Particles.RANDOM:
+                self.animation = RandomParticles('Panda3D Hello World')
+                self.mode = Particles.ANIMATION
 
-        if self.is_reverse:
-            self.scatter_text_reverse(dt)
+            case Particles.PERLIN:
+                self.animation = PerlinParticles('Bullet Hello World')
+                self.mode = Particles.ANIMATION
 
-        # self.model.set_x(self.model.get_x() + 1 * dt)
+            case Particles.DELAY_PERLIN:
+                self.animation = DelayPerlinParticles('Start 3D programming')
+                self.mode = Particles.ANIMATION
+
+            case Particles.DELAY_SIMPLEX:
+                self.animation = DelaySimplexParticles('Create Noise Texture')
+                self.mode = Particles.ANIMATION
+
+            case Particles.SIMPLEX:
+                self.animation = SimplexParticles('Try Creative Coding')
+                self.animation.create_tweens()
+                self.animation.loop()
+                self.mode = Particles.DEBUG
+
+            case Particles.ANIMATION:
+                if self.animation.update(dt):
+                    self.mode = None
+
+            case Particles.DEBUG:
+                self.animation.update(dt)
+
         return task.cont
 
 
