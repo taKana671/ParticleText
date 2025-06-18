@@ -14,7 +14,7 @@ class ImageSize(NamedTuple):
 
 class TextImage:
 
-    def __init__(self, text, font_file="DejaVuSans.ttf", font_size=60):
+    def __init__(self, text, font_file="font/DejaVuSans.ttf", font_size=60):
         self.text = text
         self.font = ImageFont.truetype(font_file, font_size)
         self.size = self.get_image_size()

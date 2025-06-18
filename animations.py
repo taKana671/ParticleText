@@ -1,18 +1,13 @@
 import array
-import sys
 import random
 from enum import Enum, auto
 
-from direct.interval.LerpInterval import LerpColorInterval, LerpColorScaleInterval
-from direct.interval.IntervalGlobal import Parallel, Sequence, Wait
-from direct.showbase.ShowBase import ShowBase
-from direct.showbase.ShowBaseGlobal import globalClock
-from panda3d.core import Point3, LColor
+from direct.interval.LerpInterval import LerpColorScaleInterval
+from panda3d.core import Point3
 from panda3d.core import GeomVertexData, GeomVertexFormat
 from panda3d.core import GeomEnums, Geom, GeomNode, GeomPoints
 
-from noise import PerlinNoise
-from noise import SimplexNoise
+from noise import PerlinNoise, Fractal2D, SimplexNoise
 from pytweener.tween import Tween
 from text_image_creator import TextImage
 
@@ -20,37 +15,32 @@ from text_image_creator import TextImage
 class Status(Enum):
 
     SHOW_TEXT = auto()
-    START_TWEEN = auto()
     HIDE_TEXT = auto()
+    START = auto()
+    GO_BACK = auto()
     TO_PARTICLES = auto()
-    TURN_BACK = auto()
     TO_TEXT = auto()
-    WAIT = auto()
     TURN = auto()
-    START_RETURN = auto()
-
 
 
 class TextColorScaleInterval(LerpColorScaleInterval):
 
-    def __init__(self, np, duration=1, fade=True, blend_type='easeInOut'):
-        color_scale = (1, 1, 1, 0) if fade else (1, 1, 1, 1)
-        start_color = (1, 1, 1, 1) if fade else (1, 1, 1, 0)
+    def __init__(self, np, duration=1, fade_out=True, blend_type='easeInOut'):
+        color_scale = (1, 1, 1, 0) if fade_out else (1, 1, 1, 1)
+        start_color = (1, 1, 1, 1) if fade_out else (1, 1, 1, 0)
         super().__init__(np, duration, color_scale, start_color, blendType=blend_type)
 
 
 class TextAnimation:
 
-    def __init__(self, text):
+    def __init__(self, text, easing_func='in_out_expo'):
         self.text = text
+        self.easing_func = easing_func
 
         props = base.win.get_properties()
         self.screen_size = props.get_size()
-
         self.tweens = []
         self.status = None
-        self.total_dt = 0
-        self.elapsed = 0
 
     def start(self):
         for tween in self.tweens:
@@ -64,19 +54,21 @@ class TextAnimation:
         for tween in self.tweens:
             tween.turn()
 
-    def delay_start(self, dt):
-        cnt = 0
-        self.total_dt += dt
-
+    def finish(self):
         for tween in self.tweens:
-            # if not tween.delay_started:
-            if not tween.is_playing:
-                cnt += 1
-                tween.delay_start(self.total_dt)
+            tween.finish()
 
-        if cnt == 0:
-            self.total_dt = 0
-            return True
+    def pause(self):
+        for tween in self.tweens:
+            tween.pause()
+
+    def resume(self):
+        for tween in self.tweens:
+            tween.resume()
+
+    def loop(self):
+        for tween in self.tweens:
+            tween.loop()
 
     def create_points(self, vdata_values, vertices_cnt):
         vdata = GeomVertexData('texts', GeomVertexFormat.get_v3(), Geom.UH_static)
@@ -94,7 +86,7 @@ class TextAnimation:
 
         self.pts_np = base.render.attach_new_node(geom_node)
         self.pts_np.set_transparency(True)
-        # self.points_np.set_render_mode_thickness(1.)
+        self.pts_np.set_render_mode_thickness(1.2)
 
     def to_particles(self):
         geom_nd = self.pts_np.node()
@@ -116,16 +108,40 @@ class TextAnimation:
         if cnt == 0:
             return True
 
-    def do_fade(self, dt, elapsed):
-        self.total_dt += dt
 
-        if self.total_dt >= elapsed:
-            self.is_faded = not self.is_faded
-            self.total_dt = 0
-            return True
+class Boomerang(TextAnimation):
+
+    def update(self, _):
+        match self.status:
+
+            case Status.SHOW_TEXT:
+                self.create_tweens()
+                self.color_scale = TextColorScaleInterval(self.pts_np, fade_out=False)
+                self.color_scale.start()
+                self.status = Status.START
+
+            case Status.START:
+                if not self.color_scale.is_playing():
+                    self.start()
+                    self.status = Status.TO_PARTICLES
+
+            case Status.TO_PARTICLES:
+                if self.to_particles():
+                    self.color_scale = TextColorScaleInterval(self.pts_np)
+                    self.color_scale.start()
+                    self.status = Status.HIDE_TEXT
+
+            case Status.HIDE_TEXT:
+                if not self.color_scale.is_playing():
+                    self.pts_np.remove_node()
+                    self.status = None
+                    return True
+
+            case _:
+                self.status = Status.SHOW_TEXT
 
 
-class RandomParticles(TextAnimation):
+class RandomParticles(Boomerang):
 
     def create_tweens(self):
         cnt = 0
@@ -140,318 +156,15 @@ class RandomParticles(TextAnimation):
             ex = (random.random() - 0.5) * self.screen_size.x
             ey = (random.random() - 0.5) * self.screen_size.y
 
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 2, yoyo=True, easing_type='in_out_expo')
+            tween = Tween(
+                Point3(x, 0, y), Point3(ex, 0, ey), 2, yoyo=True, easing_type=self.easing_func)
             self.tweens.append(tween)
             cnt += 1
 
         self.create_points(vdata_values, cnt)
 
-    def update(self, dt):
-        match self.status:
 
-            case Status.SHOW_TEXT:
-                self.create_tweens()
-                self.color_scale = TextColorScaleInterval(self.pts_np, fade=False)
-                self.color_scale.start()
-                self.status = Status.START_TWEEN
-
-            case Status.START_TWEEN:
-                if not self.color_scale.is_playing():
-                    self.start()
-                    self.status = Status.TO_PARTICLES
-
-            case Status.TO_PARTICLES:
-                if self.to_particles():
-                    self.color_scale = TextColorScaleInterval(self.pts_np, fade=True)
-                    self.color_scale.start()
-                    self.status = Status.HIDE_TEXT
-
-            case Status.HIDE_TEXT:
-                if not self.color_scale.is_playing():
-                    self.pts_np.remove_node()
-                    self.status = None
-                    return True
-
-            case _:
-                self.status = Status.SHOW_TEXT
-
-
-class PerlinParticles(TextAnimation):
-
-    def __init__(self, text):
-        super().__init__(text)
-        self.total_dt = 0
-        self.is_faded = False
-
-    def create_tweens(self):
-        cnt = 0
-        text_img = TextImage(self.text)
-        vdata_values = array.array('f', [])
-
-        perlin = PerlinNoise()
-        t = random.randint(0, 1000)
-
-        for px, py in text_img.pixel_coordinates():
-            x = px - text_img.size.w / 2
-            y = py - text_img.size.h / 2
-            vdata_values.extend([x, 0, y])
-
-            nx = px / text_img.size.w
-            ny = py / text_img.size.h
-
-            sx = perlin.pnoise2(nx + t, ny + t) - 0.5
-            sy = perlin.pnoise2((nx + t) * 2, ny + t) - 0.5
-            ex = self.screen_size.x * 2 * sx
-            ey = self.screen_size.y * 2 * sy
-
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 3, yoyo=False, easing_type='in_out_expo')
-            self.tweens.append(tween)
-            cnt += 1
-
-        self.create_points(vdata_values, cnt)
-
-    def update(self, dt):
-        match self.status:
-
-            case Status.SHOW_TEXT:
-                self.create_tweens()
-                self.color_scale = TextColorScaleInterval(self.pts_np, fade=False)
-                self.color_scale.start()
-                self.status = Status.START_TWEEN
-
-            case Status.START_TWEEN:
-                if not self.color_scale.is_playing():
-                    self.start()
-                    self.status = Status.TO_PARTICLES
-
-            case Status.TO_PARTICLES:
-                if not self.is_faded:
-                    if self.do_fade(dt, 2.0):
-                        self.color_scale = TextColorScaleInterval(self.pts_np, blend_type='easeOut')
-                        self.color_scale.start()
-
-                if self.to_particles():
-                    self.status = Status.TURN_BACK
-
-            case Status.TURN_BACK:
-                if not self.color_scale.is_playing():
-                    self.turn_back()
-                    self.status = Status.TO_TEXT
-
-            case Status.TO_TEXT:
-                if self.is_faded:
-                    if self.do_fade(dt, 0.5):
-                        self.color_scale = TextColorScaleInterval(
-                            self.pts_np, duration=0.5, fade=False, blend_type='easeIn')
-                        self.color_scale.start()
-
-                if self.to_particles():
-                    self.color_scale = TextColorScaleInterval(self.pts_np)
-                    self.color_scale.start()
-                    self.status = Status.HIDE_TEXT
-
-            case Status.HIDE_TEXT:
-                if not self.color_scale.is_playing():
-                    self.pts_np.remove_node()
-                    self.status = None
-                    return True
-
-            case _:
-                self.status = Status.SHOW_TEXT
-
-
-class DelayPerlinParticles(TextAnimation):
-
-    def __init__(self, text):
-        super().__init__(text)
-        self.total_dt = 0
-        self.is_faded = False
-        # self.is_all_started = False
-
-    def create_tweens(self):
-        cnt = 0
-        text_img = TextImage(self.text)
-        vdata_values = array.array('f', [])
-
-        perlin = PerlinNoise()
-        t = random.randint(0, 1000)
-
-        for px, py in text_img.pixel_coordinates():
-            x = px - text_img.size.w / 2
-            y = py - text_img.size.h / 2
-            vdata_values.extend([x, 0, y])
-
-            nx = px / text_img.size.w
-            ny = py / text_img.size.h
-
-            sx = perlin.pnoise2(nx + t, ny + t) - 0.5
-            sy = perlin.pnoise2((nx + t) * 2, ny + t) - 0.5
-            ex = self.screen_size.x * 2 * sx
-            ey = self.screen_size.y * 2 * sy
-
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 3, delay=nx, yoyo=False, easing_type='in_out_expo')
-            self.tweens.append(tween)
-            cnt += 1
-
-        self.create_points(vdata_values, cnt)
-
-    def update(self, dt):
-        match self.status:
-
-            case Status.SHOW_TEXT:
-                self.create_tweens()
-                self.color_scale = TextColorScaleInterval(self.pts_np, fade=False)
-                self.color_scale.start()
-                self.status = Status.START_TWEEN
-
-            case Status.START_TWEEN:
-                if not self.color_scale.is_playing():
-                    if self.delay_start(dt):
-                        self.status = Status.TO_PARTICLES
-
-                    self.to_particles()
-
-            case Status.TO_PARTICLES:
-                if not self.is_faded:
-                    if self.do_fade(dt, 0):
-                        self.color_scale = TextColorScaleInterval(
-                            self.pts_np, duration=4, blend_type='easeInOut')
-                        self.color_scale.start()
-
-                if self.to_particles():
-                    self.status = Status.TURN
-
-            case Status.TURN:
-                if not self.color_scale.is_playing():
-                    self.turn()
-                    self.status = Status.START_RETURN
-
-            case Status.START_RETURN:
-                if self.is_faded:
-                    if self.do_fade(dt, 0):
-                        self.color_scale = TextColorScaleInterval(
-                            self.pts_np, fade=False, duration=1.5, blend_type='easeIn')
-                        self.color_scale.start()
-
-                if self.delay_start(dt):
-                    self.status = Status.TO_TEXT
-
-                self.to_particles()
-
-            case Status.TO_TEXT:
-                if self.to_particles():
-                    self.color_scale = TextColorScaleInterval(self.pts_np)
-                    self.color_scale.start()
-                    self.status = Status.HIDE_TEXT
-
-            case Status.HIDE_TEXT:
-                if not self.color_scale.is_playing():
-                    self.pts_np.remove_node()
-                    self.status = None
-                    return True
-
-            case _:
-                self.status = Status.SHOW_TEXT
-
-
-class DelaySimplexParticles(TextAnimation):
-
-    def __init__(self, text):
-        super().__init__(text)
-        self.total_dt = 0
-        self.is_faded = False
-
-    def create_tweens(self):
-        cnt = 0
-        text_img = TextImage(self.text)
-        vdata_values = array.array('f', [])
-
-        simplex = SimplexNoise()
-        t = random.randint(0, 1000)
-
-        for px, py in text_img.pixel_coordinates():
-            x = px - text_img.size.w / 2
-            y = py - text_img.size.h / 2
-            vdata_values.extend([x, 0, y])
-
-            nx = px / text_img.size.w
-            ny = py / text_img.size.h
-            pnx = simplex.snoise2(nx + t, (ny + t) * 3) - 0.5
-            pny = simplex.snoise2((nx + t) * 1.5, ny + t) - 0.5
-
-            spread = (1 - nx) * 200 - 100
-            ex = self.screen_size.x * pnx + random.random() * spread
-            ey = self.screen_size.y / 2 * pny + random.random() * spread
-
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 3, delay=nx, yoyo=False, easing_type='in_out_expo')
-            self.tweens.append(tween)
-            cnt += 1
-
-        self.create_points(vdata_values, cnt)
-
-    def update(self, dt):
-        match self.status:
-
-            case Status.SHOW_TEXT:
-                self.create_tweens()
-                self.color_scale = TextColorScaleInterval(self.pts_np, fade=False)
-                self.color_scale.start()
-                self.status = Status.START_TWEEN
-
-            case Status.START_TWEEN:
-                if not self.color_scale.is_playing():
-                    if self.delay_start(dt):
-                        self.status = Status.TO_PARTICLES
-
-                    self.to_particles()
-
-            case Status.TO_PARTICLES:
-                if not self.is_faded:
-                    if self.do_fade(dt, 0):
-                        self.color_scale = TextColorScaleInterval(
-                            self.pts_np, duration=4, blend_type='easeInOut')
-                        self.color_scale.start()
-
-                if self.to_particles():
-                    self.status = Status.TURN
-
-            case Status.TURN:
-                if not self.color_scale.is_playing():
-                    self.turn()
-                    self.status = Status.START_RETURN
-
-            case Status.START_RETURN:
-                if self.is_faded:
-                    if self.do_fade(dt, 0):
-                        self.color_scale = TextColorScaleInterval(
-                            self.pts_np, fade=False, duration=1.5, blend_type='easeIn')
-                        self.color_scale.start()
-
-                if self.delay_start(dt):
-                    self.status = Status.TO_TEXT
-
-                self.to_particles()
-
-            case Status.TO_TEXT:
-                if self.to_particles():
-                    self.color_scale = TextColorScaleInterval(self.pts_np)
-                    self.color_scale.start()
-                    self.status = Status.HIDE_TEXT
-
-            case Status.HIDE_TEXT:
-                if not self.color_scale.is_playing():
-                    self.pts_np.remove_node()
-                    self.status = None
-                    return True
-
-            case _:
-                self.status = Status.SHOW_TEXT
-
-
-class SimplexParticles(TextAnimation):
-
-    def __init__(self, text):
-        super().__init__(text)
+class SimplexParticles(Boomerang):
 
     def create_tweens(self):
         cnt = 0
@@ -474,27 +187,281 @@ class SimplexParticles(TextAnimation):
             ex = self.screen_size.x * sx
             ey = self.screen_size.y * sy
 
-            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 3, yoyo=True, easing_type='in_out_bounce')
+            tween = Tween(Point3(x, 0, y), Point3(ex, 0, ey), 3, yoyo=True, easing_type=self.easing_func)
             self.tweens.append(tween)
             cnt += 1
 
         self.create_points(vdata_values, cnt)
 
+
+class Fade(TextAnimation):
+
+    def __init__(self, text, easing_func='in_out_expo'):
+        super().__init__(text, easing_func)
+        self.is_faded = False
+        self.total_dt = 0
+        self.elapsed = 0
+
+    def start_fade(self, dt, elapsed):
+        self.total_dt += dt
+
+        if self.total_dt >= elapsed:
+            self.is_faded = not self.is_faded
+            self.total_dt = 0
+            return True
+
+    def fade_out(self, dt, elapsed, duration=1):
+        if not self.is_faded:
+            if self.start_fade(dt, elapsed):
+                self.color_scale = TextColorScaleInterval(
+                    self.pts_np, duration, True, 'easeOut')
+                self.color_scale.start()
+
+    def fade_in(self, dt, elapsed, duration=1):
+        if self.is_faded:
+            if self.start_fade(dt, elapsed):
+                self.color_scale = TextColorScaleInterval(
+                    self.pts_np, duration, False, 'easeIn')
+                self.color_scale.start()
+
     def update(self, dt):
-        self.to_particles()
+        match self.status:
 
-    def finish(self):
-        for tween in self.tweens:
-            tween.finish()
+            case Status.SHOW_TEXT:
+                self.create_tweens()
+                self.color_scale = TextColorScaleInterval(self.pts_np, fade_out=False)
+                self.color_scale.start()
+                self.status = Status.START
 
-    def pause(self):
-        for tween in self.tweens:
-            tween.pause()
+            case Status.START:
+                if not self.color_scale.is_playing():
+                    self.start()
+                    self.status = Status.TO_PARTICLES
 
-    def resume(self):
-        for tween in self.tweens:
-            tween.resume()
+            case Status.TO_PARTICLES:
+                self.fade_out(dt, 2.0)
 
-    def loop(self):
+                if self.to_particles():
+                    self.status = Status.GO_BACK
+
+            case Status.GO_BACK:
+                if not self.color_scale.is_playing():
+                    self.turn_back()
+                    self.status = Status.TO_TEXT
+
+            case Status.TO_TEXT:
+                self.fade_in(dt, 0.5, 0.5)
+
+                if self.to_particles():
+                    self.color_scale = TextColorScaleInterval(self.pts_np)
+                    self.color_scale.start()
+                    self.status = Status.HIDE_TEXT
+
+            case Status.HIDE_TEXT:
+                if not self.color_scale.is_playing():
+                    self.pts_np.remove_node()
+                    self.status = None
+                    return True
+
+            case _:
+                self.status = Status.SHOW_TEXT
+
+
+class PerlinParticles(Fade):
+
+    def create_tweens(self):
+        cnt = 0
+        text_img = TextImage(self.text)
+        vdata_values = array.array('f', [])
+
+        perlin = PerlinNoise()
+        t = random.randint(0, 1000)
+
+        for px, py in text_img.pixel_coordinates():
+            x = px - text_img.size.w / 2
+            y = py - text_img.size.h / 2
+            vdata_values.extend([x, 0, y])
+
+            nx = px / text_img.size.w
+            ny = py / text_img.size.h
+
+            sx = perlin.pnoise2(nx + t, (ny + t) * 2) - 0.5
+            sy = perlin.pnoise2((nx + t) * 2, ny + t) - 0.5
+            ex = self.screen_size.x * 2 * sx
+            ey = self.screen_size.y * 2 * sy
+
+            tween = Tween(
+                Point3(x, 0, y), Point3(ex, 0, ey), 3, yoyo=False, easing_type=self.easing_func)
+            self.tweens.append(tween)
+            cnt += 1
+
+        self.create_points(vdata_values, cnt)
+
+
+class DelayedStart(Fade):
+
+    def __init__(self, text, easing_func='in_out_expo', do_fade=False):
+        super().__init__(text, easing_func)
+        self.do_fade = do_fade
+
+    def delay_start(self, dt):
+        cnt = 0
+        self.total_dt += dt
+
         for tween in self.tweens:
-            tween.loop()
+            if not tween.is_playing:
+                cnt += 1
+                tween.delay_start(self.total_dt)
+
+        if cnt == 0:
+            self.total_dt = 0
+            return True
+
+    def update(self, dt):
+        match self.status:
+
+            case Status.SHOW_TEXT:
+                self.create_tweens()
+                self.color_scale = TextColorScaleInterval(self.pts_np, fade_out=False)
+                self.color_scale.start()
+                self.status = Status.START
+
+            case Status.START:
+                if not self.color_scale.is_playing():
+                    if self.delay_start(dt):
+                        self.status = Status.TO_PARTICLES
+
+                    self.to_particles()
+
+            case Status.TO_PARTICLES:
+                if self.do_fade:
+                    self.fade_out(dt, 0, 3)
+
+                if self.to_particles():
+                    self.status = Status.TURN
+
+            case Status.TURN:
+                if not self.color_scale.is_playing():
+                    self.turn()
+                    self.status = Status.GO_BACK
+
+            case Status.GO_BACK:
+                if self.do_fade:
+                    self.fade_in(dt, 0, 1.5)
+
+                if self.delay_start(dt):
+                    self.status = Status.TO_TEXT
+
+                self.to_particles()
+
+            case Status.TO_TEXT:
+                if self.to_particles():
+                    self.color_scale = TextColorScaleInterval(self.pts_np)
+                    self.color_scale.start()
+                    self.status = Status.HIDE_TEXT
+
+            case Status.HIDE_TEXT:
+                if not self.color_scale.is_playing():
+                    self.pts_np.remove_node()
+                    self.status = None
+                    return True
+
+            case _:
+                self.status = Status.SHOW_TEXT
+
+
+class SpreadSimplexParticles(DelayedStart):
+
+    def create_tweens(self):
+        cnt = 0
+        text_img = TextImage(self.text)
+        vdata_values = array.array('f', [])
+
+        simplex = SimplexNoise()
+        t = random.uniform(0, 1000)
+
+        for px, py in text_img.pixel_coordinates():
+            x = px - text_img.size.w / 2
+            y = py - text_img.size.h / 2
+            vdata_values.extend([x, 0, y])
+
+            nx = px / text_img.size.w
+            ny = py / text_img.size.h
+            sx = simplex.snoise2(nx + t, (ny + t) * 3.0) - 0.5
+            sy = simplex.snoise2((nx + t) * 0.5, ny + t) - 0.5
+
+            spread = (1 - nx) * 100 - 150
+            ex = self.screen_size.x * sx + random.random() * spread
+            ey = self.screen_size.y * sy + random.random() * spread
+
+            tween = Tween(
+                Point3(x, 0, y), Point3(ex, 0, ey), 2, delay=nx, yoyo=False, easing_type=self.easing_func)
+            self.tweens.append(tween)
+            cnt += 1
+
+        self.create_points(vdata_values, cnt)
+
+
+class DelayedPerlinParticles(DelayedStart):
+
+    def create_tweens(self):
+        cnt = 0
+        text_img = TextImage(self.text)
+        vdata_values = array.array('f', [])
+
+        perlin = PerlinNoise()
+        t = random.randint(0, 1000)
+
+        for px, py in text_img.pixel_coordinates():
+            x = px - text_img.size.w / 2
+            y = py - text_img.size.h / 2
+            vdata_values.extend([x, 0, y])
+
+            nx = px / text_img.size.w
+            ny = py / text_img.size.h
+
+            pnx = perlin.pnoise2(nx + t, ny + t) - 0.5
+            pny = perlin.pnoise2((nx + t) * 2, ny + t) - 0.5
+            ex = self.screen_size.x * 2 * pnx
+            ey = self.screen_size.y * 2 * pny
+
+            tween = Tween(
+                Point3(x, 0, y), Point3(ex, 0, ey), 3, delay=nx, yoyo=False, easing_type=self.easing_func)
+            self.tweens.append(tween)
+            cnt += 1
+
+        self.create_points(vdata_values, cnt)
+
+
+class SpreadFractalParticles(DelayedStart):
+
+    def create_tweens(self):
+        cnt = 0
+        text_img = TextImage(self.text)
+        vdata_values = array.array('f', [])
+
+        perlin = PerlinNoise()
+        fract = Fractal2D(perlin.pnoise2)
+        t = random.randint(0, 1000)
+
+        for px, py in text_img.pixel_coordinates():
+            x = px - text_img.size.w / 2
+            y = py - text_img.size.h / 2
+            vdata_values.extend([x, 0, y])
+
+            nx = px / text_img.size.w
+            ny = py / text_img.size.h
+
+            fx = fract.fractal(nx + t, (ny + t) * 2) - 0.5
+            fy = fract.fractal((nx + t) * 2, ny + t) - 0.5
+
+            spread = (1 - nx) * 400 - 400
+            ex = self.screen_size.x * fx + random.random() * spread
+            ey = self.screen_size.y * fy + random.random() * spread
+
+            tween = Tween(
+                Point3(x, 0, y), Point3(ex, 0, ey), 3, delay=nx, yoyo=False, easing_type=self.easing_func)
+            self.tweens.append(tween)
+            cnt += 1
+
+        self.create_points(vdata_values, cnt)
