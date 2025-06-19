@@ -1,0 +1,6 @@
+[submodule "pytweener"]
+	path = pytweener
+	url = https://github.com/taKana671/pytweener.git
+[submodule "noise"]
+	path = noise
+	url = https://github.com/taKana671/NoiseTexture.git
