@@ -8,7 +8,6 @@ from direct.showbase.ShowBaseGlobal import globalClock
 from animations import (
     RandomParticles,
     SimplexParticles,
-    PerlinParticles,
     SpreadFractalParticles,
     DelayedPerlinParticles,
     SpreadSimplexParticles
@@ -18,7 +17,8 @@ from animations import (
 class Particles(Enum):
 
     RANDOM = auto()
-    PERLIN = auto()
+    FRACTAL_PERLIN = auto()
+    SIMPLEX = auto()
     DELAY_PERLIN = auto()
     SPREAD_SIMPLEX = auto()
 
@@ -46,9 +46,17 @@ class ParticleText(ShowBase):
         self.text = ''
         self.entry = None
 
+        self.accept('p', self.pause)
+        self.accept('r', self.resume)
         self.accept('c', self.change_text)
         self.accept('escape', sys.exit)
         self.taskMgr.add(self.update, 'update')
+
+    def pause(self):
+        self.animation.pause()
+
+    def resume(self):
+        self.animation.resume()
 
     def change_text(self):
         if self.entry is None:
@@ -82,18 +90,20 @@ class ParticleText(ShowBase):
                         t = self.text if self.text else 'Panda3D Hello World'
                         self.animation = RandomParticles(t)
 
-                    case Particles.PERLIN:
+                    case Particles.FRACTAL_PERLIN:
                         t = self.text if self.text else 'Bullet Hello World'
-                        # self.animation = SimplexParticles(t)
-                        # self.animation = PerlinParticles(t)
                         self.animation = SpreadFractalParticles(t, easing_func='in_out_back')
 
+                    case Particles.SIMPLEX:
+                        t = self.text if self.text else 'Try Creative Coding'
+                        self.animation = SimplexParticles(t)
+
                     case Particles.DELAY_PERLIN:
-                        t = self.text if self.text else 'Start 3D programming'
+                        t = self.text if self.text else 'Enjoy 3D programming'
                         self.animation = DelayedPerlinParticles(t, do_fade=True, easing_func='out_back')
 
                     case Particles.SPREAD_SIMPLEX:
-                        t = self.text if self.text else 'Enjoy 3D programming'
+                        t = self.text if self.text else 'I Love panda3D'
                         self.animation = SpreadSimplexParticles(t, easing_func='in_back')
 
                 self.status = Status.ANIMATION

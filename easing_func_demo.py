@@ -3,24 +3,17 @@ from enum import Enum, auto
 
 from direct.gui.DirectGui import DirectRadioButton
 from direct.showbase.ShowBase import ShowBase
-from direct.showbase.ShowBaseGlobal import globalClock
 from panda3d.core import TextNode
-from animations import SimplexParticles
 
-
-class Particles(Enum):
-
-    RANDOM = auto()
-    PERLIN = auto()
-    DELAY_PERLIN = auto()
-    SPREAD_SIMPLEX = auto()
+from animations import SimplexParticles, TextColorScaleInterval
 
 
 class Status(Enum):
 
+    SHOW = auto()
     ANIMATION = auto()
-    SELECT = auto()
-    FINISH = auto()
+    CHANGE = auto()
+    HIDE = auto()
 
 
 class RadioButton(DirectRadioButton):
@@ -43,7 +36,7 @@ class RadioButton(DirectRadioButton):
         self.initialiseoptions(type(self))
 
 
-class ChooseEasingFunc(ShowBase):
+class EasingFuncDemo(ShowBase):
 
     def __init__(self):
         super().__init__()
@@ -54,20 +47,14 @@ class ChooseEasingFunc(ShowBase):
         self.camera.look_at(0, 0, 0)
         self.camLens.set_fov(90)
 
-        self.create_entry()
-        self.modes = list(Particles)
-        self.idx = 0
+        self.create_gui()
         self.status = None
-        self.text = ''
-        self.entry = None
-        self.ease_func = 'in_sine'
-        self.finish = False
+        self.change_func = False
 
-        # self.accept('c', self.change_text)
         self.accept('escape', sys.exit)
         self.taskMgr.add(self.update, 'update')
 
-    def create_entry(self):
+    def create_gui(self):
         funcs = ['sine', 'cubic', 'quint', 'circ', 'elastic', 'quad', 'quart', 'expo', 'back', 'bounce']
         modes = ['in', 'out', 'in_out']
         self.func = funcs[:1]
@@ -95,62 +82,43 @@ class ChooseEasingFunc(ShowBase):
             r.setOthers(radios)
 
     def choose_easing(self):
-        self.finish = True
-        # print(self.func)
-        # print(self.mode)
-
-    def get_new_text(self, text):
-        self.text = text
-        # self.entry.detach_node()
-        print(self.text)
+        self.change_func = True
 
     def update(self, task):
-        dt = globalClock.get_dt()
-
         match self.status:
 
-        #     case Status.SELECT:
-        #         match self.modes[self.idx]:
-
-        #             case Particles.RANDOM:
-        #                 t = self.text if self.text else 'Panda3D Hello World'
-        #                 self.animation = RandomParticles(t)
-
-        #             case Particles.PERLIN:
-        #                 t = self.text if self.text else 'Bullet Hello World'
-        #                 self.animation = PerlinParticles(t)
-
-        #             case Particles.DELAY_PERLIN:
-        #                 t = self.text if self.text else 'Start 3D programming'
-        #                 self.animation = DelayedPerlinParticles(t)
-
-        #             case Particles.SPREAD_SIMPLEX:
-        #                 t = self.text if self.text else 'Enjoy 3D programming'
-        #                 self.animation = SpreadSimplexParticles(t)
-
-        #         self.status = Status.ANIMATION
-        #         self.idx = next_idx if (next_idx := self.idx + 1) < len(self.modes) else 0
+            case Status.SHOW:
+                if not self.color_scale.is_playing():
+                    self.animation.start()
+                    self.status = Status.ANIMATION
 
             case Status.ANIMATION:
-                self.animation.update(dt)
+                if self.animation.to_particles():
+                    self.status = Status.CHANGE
 
-                if self.finish:
-                    self.animation.finish()
-                    self.status = Status.FINISH
-                    self.finish = False
+            case Status.CHANGE:
+                if self.change_func:
+                    self.status = Status.HIDE
+                    self.color_scale = TextColorScaleInterval(self.animation.pts_np)
+                    self.color_scale.start()
+                    self.change_func = False
 
-            case Status.FINISH:
-                if self.animation.update(dt):
+            case Status.HIDE:
+                if not self.color_scale.is_playing():
+                    self.animation.pts_np.remove_node()
                     self.status = None
 
             case _:
                 func_name = '_'.join(self.mode + self.func)
                 self.animation = SimplexParticles(func_name, func_name)
-                self.status = Status.ANIMATION
+                self.animation.create_tweens()
+                self.color_scale = TextColorScaleInterval(self.animation.pts_np, fade_out=False)
+                self.animation.start()
+                self.status = Status.SHOW
 
         return task.cont
 
 
 if __name__ == '__main__':
-    app = ChooseEasingFunc()
+    app = EasingFuncDemo()
     app.run()

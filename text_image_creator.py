@@ -1,9 +1,7 @@
 from typing import NamedTuple
 
 import numpy as np
-from PIL import Image
-from PIL import ImageDraw
-from PIL import ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 
 class ImageSize(NamedTuple):
